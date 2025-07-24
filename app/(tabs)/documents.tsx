@@ -21,8 +21,17 @@ import {
   Plus,
   Search,
   Filter,
+  Camera,
+  Mic,
+  ScanLine,
+  FileAudio,
+  Image as ImageIcon,
+  Zap,
 } from 'lucide-react-native';
 import { AIDocumentProcessor } from '@/components/AIDocumentProcessor';
+import { CameraScanner } from '@/components/CameraScanner';
+import { VoiceTranscriber } from '@/components/VoiceTranscriber';
+import { PDFEditor } from '@/components/PDFEditor';
 
 interface Document {
   id: string;
@@ -54,12 +63,43 @@ export default function DocumentsScreen() {
       modifiedAt: new Date('2024-01-14'),
       size: '15.3 KB',
     },
+    {
+      id: '3',
+      title: 'Contract Agreement',
+      content: 'Legal contract document with terms and conditions for the new partnership agreement...',
+      type: 'pdf',
+      createdAt: new Date('2024-01-13'),
+      modifiedAt: new Date('2024-01-13'),
+      size: '245.7 KB',
+    },
+    {
+      id: '4',
+      title: 'Voice Recording - Ideas',
+      content: 'Transcribed voice note: "Remember to implement the new user interface design with glassmorphism effects and smooth animations. Also need to add voice transcription feature and camera scanning capabilities."',
+      type: 'txt',
+      createdAt: new Date('2024-01-12'),
+      modifiedAt: new Date('2024-01-12'),
+      size: '1.8 KB',
+    },
+    {
+      id: '5',
+      title: 'Scanned Business Card',
+      content: 'Sarah Johnson\nSenior Product Manager\nTech Innovations Inc.\n\nPhone: +1 (555) 987-6543\nEmail: sarah.johnson@techinnovations.com\nWebsite: www.techinnovations.com\nAddress: 456 Innovation Drive, Tech Valley, CA 95000',
+      type: 'txt',
+      createdAt: new Date('2024-01-11'),
+      modifiedAt: new Date('2024-01-11'),
+      size: '0.9 KB',
+    },
   ]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [showAIProcessor, setShowAIProcessor] = useState(false);
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
+  const [showVoiceTranscriber, setShowVoiceTranscriber] = useState(false);
+  const [showPDFEditor, setShowPDFEditor] = useState(false);
+  const [scanMode, setScanMode] = useState<'document' | 'text' | 'business-card'>('document');
 
   const pickDocument = async () => {
     Alert.alert('Upload Document', 'Document picker would open here');
@@ -108,13 +148,72 @@ export default function DocumentsScreen() {
     );
   };
 
+  const openCameraScanner = (mode: 'document' | 'text' | 'business-card') => {
+    setScanMode(mode);
+    setShowCameraScanner(true);
+  };
+
+  const handleScanComplete = (text: string, imageUri?: string) => {
+    const newDocument: Document = {
+      id: Date.now().toString(),
+      title: `Scanned ${scanMode === 'business-card' ? 'Business Card' : scanMode === 'text' ? 'Text' : 'Document'}`,
+      content: text,
+      type: 'txt',
+      createdAt: new Date(),
+      modifiedAt: new Date(),
+      size: `${Math.round(text.length / 1024 * 10) / 10} KB`,
+    };
+    
+    setDocuments(prev => [newDocument, ...prev]);
+    setShowCameraScanner(false);
+    Alert.alert('Scan Complete!', 'Document has been scanned and added to your library.');
+  };
+
+  const handleVoiceTranscription = (text: string, audioUri?: string) => {
+    const newDocument: Document = {
+      id: Date.now().toString(),
+      title: 'Voice Transcription',
+      content: text,
+      type: 'txt',
+      createdAt: new Date(),
+      modifiedAt: new Date(),
+      size: `${Math.round(text.length / 1024 * 10) / 10} KB`,
+    };
+    
+    setDocuments(prev => [newDocument, ...prev]);
+    setShowVoiceTranscriber(false);
+    Alert.alert('Transcription Complete!', 'Voice recording has been transcribed and saved.');
+  };
+
+  const openPDFEditor = () => {
+    if (selectedDocument?.type === 'pdf') {
+      setShowPDFEditor(true);
+    } else {
+      Alert.alert('PDF Editor', 'This feature is only available for PDF documents.');
+    }
+  };
+
+  const handlePDFSave = (annotations: any[]) => {
+    setShowPDFEditor(false);
+    Alert.alert('PDF Saved', 'Your PDF annotations have been saved successfully!');
+  };
+
   const filteredDocuments = documents.filter(doc =>
     doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     doc.content.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const getFileIcon = (type: string) => {
-    return <FileText size={20} color="#6366F1" />;
+    switch (type) {
+      case 'pdf':
+        return <FileText size={20} color="#EF4444" />;
+      case 'docx':
+        return <FileText size={20} color="#2563EB" />;
+      case 'txt':
+        return <FileText size={20} color="#6366F1" />;
+      default:
+        return <FileText size={20} color="#6366F1" />;
+    }
   };
 
   if (selectedDocument) {
@@ -133,6 +232,12 @@ export default function DocumentsScreen() {
             <View style={styles.documentActions}>
               <TouchableOpacity style={styles.actionButton} onPress={enhanceWithAI}>
                 <Sparkles size={18} color="#8B5CF6" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionButton} onPress={() => setShowVoiceTranscriber(true)}>
+                <Mic size={18} color="#EC4899" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionButton} onPress={openPDFEditor}>
+                <Edit3 size={18} color="#F59E0B" />
               </TouchableOpacity>
               <TouchableOpacity style={styles.actionButton} onPress={exportDocument}>
                 <Download size={18} color="#6366F1" />
@@ -186,6 +291,23 @@ export default function DocumentsScreen() {
               isPremium={false} // You can connect this to your usage tracking
             />
           )}
+
+          {/* Voice Transcriber */}
+          {showVoiceTranscriber && (
+            <VoiceTranscriber
+              onTranscriptionComplete={handleVoiceTranscription}
+              onClose={() => setShowVoiceTranscriber(false)}
+            />
+          )}
+
+          {/* PDF Editor */}
+          {showPDFEditor && selectedDocument && (
+            <PDFEditor
+              pdfUri={selectedDocument.id}
+              onSave={handlePDFSave}
+              onClose={() => setShowPDFEditor(false)}
+            />
+          )}
         </LinearGradient>
       </SafeAreaView>
     );
@@ -230,12 +352,24 @@ export default function DocumentsScreen() {
             <Upload size={20} color="#6366F1" />
             <Text style={styles.quickActionText}>Upload</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickAction}>
-            <FileText size={20} color="#8B5CF6" />
-            <Text style={styles.quickActionText}>New Doc</Text>
+          <TouchableOpacity style={styles.quickAction} onPress={() => openCameraScanner('document')}>
+            <Camera size={20} color="#10B981" />
+            <Text style={styles.quickActionText}>Scan Doc</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickAction} onPress={() => openCameraScanner('text')}>
+            <ScanLine size={20} color="#F59E0B" />
+            <Text style={styles.quickActionText}>Scan Text</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickAction} onPress={() => setShowVoiceTranscriber(true)}>
+            <Mic size={20} color="#EC4899" />
+            <Text style={styles.quickActionText}>Voice Note</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickAction} onPress={() => openCameraScanner('business-card')}>
+            <ImageIcon size={20} color="#8B5CF6" />
+            <Text style={styles.quickActionText}>Bus. Card</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.quickAction}>
-            <Sparkles size={20} color="#EC4899" />
+            <Sparkles size={20} color="#6366F1" />
             <Text style={styles.quickActionText}>AI Generate</Text>
           </TouchableOpacity>
         </ScrollView>
@@ -282,6 +416,23 @@ export default function DocumentsScreen() {
             </View>
           )}
         </ScrollView>
+
+        {/* Camera Scanner */}
+        {showCameraScanner && (
+          <CameraScanner
+            scanMode={scanMode}
+            onScanComplete={handleScanComplete}
+            onClose={() => setShowCameraScanner(false)}
+          />
+        )}
+
+        {/* Voice Transcriber */}
+        {showVoiceTranscriber && (
+          <VoiceTranscriber
+            onTranscriptionComplete={handleVoiceTranscription}
+            onClose={() => setShowVoiceTranscriber(false)}
+          />
+        )}
       </LinearGradient>
     </SafeAreaView>
   );
