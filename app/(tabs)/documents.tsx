@@ -22,6 +22,7 @@ import {
   Search,
   Filter,
 } from 'lucide-react-native';
+import { AIDocumentProcessor } from '@/components/AIDocumentProcessor';
 
 interface Document {
   id: string;
@@ -58,6 +59,7 @@ export default function DocumentsScreen() {
   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
+  const [showAIProcessor, setShowAIProcessor] = useState(false);
 
   const pickDocument = async () => {
     Alert.alert('Upload Document', 'Document picker would open here');
@@ -85,16 +87,12 @@ export default function DocumentsScreen() {
   };
 
   const enhanceWithAI = () => {
-    Alert.alert(
-      'AI Enhancement',
-      'Choose enhancement type:',
-      [
-        { text: 'Grammar Check', onPress: () => console.log('Grammar check') },
-        { text: 'Rephrase', onPress: () => console.log('Rephrase') },
-        { text: 'Summarize', onPress: () => console.log('Summarize') },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
+    setShowAIProcessor(true);
+  };
+
+  const handleAIContentUpdate = (newContent: string) => {
+    setEditContent(newContent);
+    setIsEditing(true);
   };
 
   const exportDocument = () => {
@@ -178,6 +176,16 @@ export default function DocumentsScreen() {
               </View>
             </BlurView>
           </ScrollView>
+
+          {/* AI Document Processor */}
+          {showAIProcessor && (
+            <AIDocumentProcessor
+              content={editContent}
+              onContentUpdate={handleAIContentUpdate}
+              onClose={() => setShowAIProcessor(false)}
+              isPremium={false} // You can connect this to your usage tracking
+            />
+          )}
         </LinearGradient>
       </SafeAreaView>
     );

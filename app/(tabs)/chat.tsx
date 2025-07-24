@@ -10,10 +10,12 @@ import {
   Platform,
   Animated,
   Dimensions,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
 import { 
   Send, 
   Bot, 
@@ -21,9 +23,17 @@ import {
   Copy, 
   ChevronDown,
   Sparkles,
-  Plus
+  Plus,
+  Crown,
+  Zap,
+  AlertCircle,
+  Mic
 } from 'lucide-react-native';
 import { createClient } from '@blinkdotnew/sdk';
+import { useUsageTracking } from '@/hooks/useUsageTracking';
+import { PremiumModal } from '@/components/PremiumModal';
+import { VoiceInput } from '@/components/VoiceInput';
+import { StreamingMessage } from '@/components/StreamingMessage';
 
 const { width } = Dimensions.get('window');
 
@@ -33,13 +43,34 @@ interface Message {
   isUser: boolean;
   timestamp: Date;
   model?: string;
+  isStreaming?: boolean;
 }
 
 const AI_MODELS = [
-  { id: 'gpt-4o-mini', name: 'GPT-4 Mini', description: 'Fast & efficient' },
-  { id: 'gpt-4o', name: 'GPT-4', description: 'Most capable' },
-  { id: 'claude-3-sonnet', name: 'Claude 3 Sonnet', description: 'Balanced performance' },
-  { id: 'gemini-pro', name: 'Gemini Pro', description: 'Google\'s latest' },
+  { 
+    id: 'gpt-4o-mini', 
+    name: 'GPT-4 Mini', 
+    description: 'Fast & efficient',
+    isPremium: false 
+  },
+  { 
+    id: 'gpt-4o', 
+    name: 'GPT-4', 
+    description: 'Most capable',
+    isPremium: true 
+  },
+  { 
+    id: 'claude-3-sonnet', 
+    name: 'Claude 3 Sonnet', 
+    description: 'Balanced performance',
+    isPremium: true 
+  },
+  { 
+    id: 'gemini-pro', 
+    name: 'Gemini Pro', 
+    description: 'Google\'s latest',
+    isPremium: true 
+  },
 ];
 
 const blink = createClient({
@@ -54,15 +85,30 @@ export default function ChatScreen() {
       text: 'Hello! I\'m your AI assistant. I can help you with writing, analysis, coding, and much more. What would you like to work on today?',
       isUser: false,
       timestamp: new Date(),
-      model: 'gpt-4o-mini'
+      model: 'GPT-4 Mini'
     }
   ]);
   const [inputText, setInputText] = useState('');
   const [selectedModel, setSelectedModel] = useState(AI_MODELS[0]);
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [streamingMessage, setStreamingMessage] = useState<Message | null>(null);
+  
   const scrollViewRef = useRef<ScrollView>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  
+  const {
+    usage,
+    loading: usageLoading,
+    incrementMessageCount,
+    canSendMessage,
+    getRemainingMessages,
+    useToken,
+    addTokens,
+    upgradeToPremium,
+  } = useUsageTracking();
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -72,12 +118,32 @@ export default function ChatScreen() {
     }).start();
   }, []);
 
-  const sendMessage = async () => {
-    if (!inputText.trim() || isLoading) return;
+  const handleModelSelect = (model: typeof AI_MODELS[0]) => {
+    if (model.isPremium && !usage.isPremium) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      setShowPremiumModal(true);
+      return;
+    }
+    
+    setSelectedModel(model);
+    setShowModelSelector(false);
+    Haptics.selectionAsync();
+  };
+
+  const sendMessage = async (messageText?: string) => {
+    const textToSend = messageText || inputText.trim();
+    if (!textToSend || isLoading) return;
+
+    // Check if user can send message
+    if (!canSendMessage()) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      setShowPremiumModal(true);
+      return;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      text: inputText.trim(),
+      text: textToSend,
       isUser: true,
       timestamp: new Date(),
     };
@@ -86,22 +152,55 @@ export default function ChatScreen() {
     setInputText('');
     setIsLoading(true);
 
-    try {
-      const { text } = await blink.ai.generateText({
-        prompt: inputText.trim(),
-        model: selectedModel.id,
-        maxTokens: 1000,
-      });
+    // Use token if not premium and no free messages left
+    if (!usage.isPremium && usage.dailyMessages >= 10) {
+      useToken();
+    } else if (!usage.isPremium) {
+      incrementMessageCount();
+    }
 
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    // Create streaming message
+    const streamingMsg: Message = {
+      id: (Date.now() + 1).toString(),
+      text: '',
+      isUser: false,
+      timestamp: new Date(),
+      model: selectedModel.name,
+      isStreaming: true,
+    };
+
+    setStreamingMessage(streamingMsg);
+
+    try {
+      let fullText = '';
+      
+      await blink.ai.streamText(
+        {
+          prompt: textToSend,
+          model: selectedModel.id,
+          maxTokens: 1000,
+        },
+        (chunk) => {
+          fullText += chunk;
+          setStreamingMessage(prev => prev ? { ...prev, text: fullText } : null);
+        }
+      );
+
+      // Complete the streaming message
       const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: text,
+        id: streamingMsg.id,
+        text: fullText,
         isUser: false,
         timestamp: new Date(),
         model: selectedModel.name,
+        isStreaming: false,
       };
 
       setMessages(prev => [...prev, aiMessage]);
+      setStreamingMessage(null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -111,6 +210,8 @@ export default function ChatScreen() {
         model: selectedModel.name,
       };
       setMessages(prev => [...prev, errorMessage]);
+      setStreamingMessage(null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setIsLoading(false);
     }
@@ -120,9 +221,66 @@ export default function ChatScreen() {
     }, 100);
   };
 
+  const handleVoiceTranscription = (text: string) => {
+    setInputText(text);
+    // Auto-send voice messages
+    setTimeout(() => {
+      sendMessage(text);
+    }, 500);
+  };
+
+  const startListening = () => {
+    setIsListening(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // In a real app, you'd start speech recognition here
+    setTimeout(() => {
+      // Simulate transcription
+      const sampleTranscriptions = [
+        "What's the weather like today?",
+        "Help me write a professional email",
+        "Explain quantum computing in simple terms",
+        "Create a to-do list for my project",
+      ];
+      const randomText = sampleTranscriptions[Math.floor(Math.random() * sampleTranscriptions.length)];
+      handleVoiceTranscription(randomText);
+      setIsListening(false);
+    }, 2000);
+  };
+
+  const stopListening = () => {
+    setIsListening(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
   const copyMessage = (text: string) => {
     // In a real app, you'd use Clipboard API
-    console.log('Copied:', text);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Alert.alert('Copied!', 'Message copied to clipboard');
+  };
+
+  const handlePremiumUpgrade = (plan: 'monthly' | 'yearly' | 'tokens') => {
+    if (plan === 'tokens') {
+      // Simulate token purchase
+      addTokens(50);
+      Alert.alert('Success!', 'You\'ve received 50 message tokens!');
+    } else {
+      // Simulate premium upgrade
+      upgradeToPremium();
+      Alert.alert('Welcome to Premium!', 'You now have unlimited access to all features!');
+    }
+    setShowPremiumModal(false);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const newChat = () => {
+    setMessages([{
+      id: Date.now().toString(),
+      text: 'Hello! I\'m your AI assistant. I can help you with writing, analysis, coding, and much more. What would you like to work on today?',
+      isUser: false,
+      timestamp: new Date(),
+      model: selectedModel.name
+    }]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
   const renderMessage = (message: Message) => (
@@ -163,6 +321,12 @@ export default function ChatScreen() {
     </Animated.View>
   );
 
+  const remainingMessages = getRemainingMessages();
+  const showUsageWarning = !usage.isPremium && (
+    (typeof remainingMessages === 'number' && remainingMessages <= 3) ||
+    (usage.tokens > 0 && usage.tokens <= 5)
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient
@@ -174,12 +338,30 @@ export default function ChatScreen() {
           <View style={styles.headerContent}>
             <View>
               <Text style={styles.headerTitle}>Z AI Chat</Text>
-              <Text style={styles.headerSubtitle}>Powered by multiple AI models</Text>
+              <View style={styles.headerSubtitleContainer}>
+                <Text style={styles.headerSubtitle}>
+                  {usage.isPremium ? 'Premium' : `${remainingMessages} messages left`}
+                </Text>
+                {usage.isPremium && <Crown size={14} color="#F59E0B" />}
+              </View>
             </View>
-            <TouchableOpacity style={styles.newChatButton}>
+            <TouchableOpacity style={styles.newChatButton} onPress={newChat}>
               <Plus size={20} color="#6366F1" />
             </TouchableOpacity>
           </View>
+          
+          {/* Usage Warning */}
+          {showUsageWarning && (
+            <TouchableOpacity 
+              style={styles.usageWarning}
+              onPress={() => setShowPremiumModal(true)}
+            >
+              <AlertCircle size={16} color="#F59E0B" />
+              <Text style={styles.usageWarningText}>
+                Running low on messages. Upgrade for unlimited access!
+              </Text>
+            </TouchableOpacity>
+          )}
           
           {/* Model Selector */}
           <TouchableOpacity
@@ -188,6 +370,9 @@ export default function ChatScreen() {
           >
             <Sparkles size={16} color="#8B5CF6" />
             <Text style={styles.modelText}>{selectedModel.name}</Text>
+            {selectedModel.isPremium && !usage.isPremium && (
+              <Crown size={14} color="#F59E0B" />
+            )}
             <ChevronDown size={16} color="#9CA3AF" />
           </TouchableOpacity>
 
@@ -198,15 +383,18 @@ export default function ChatScreen() {
                   key={model.id}
                   style={[
                     styles.modelOption,
-                    selectedModel.id === model.id && styles.selectedModel
+                    selectedModel.id === model.id && styles.selectedModel,
+                    model.isPremium && !usage.isPremium && styles.premiumModel
                   ]}
-                  onPress={() => {
-                    setSelectedModel(model);
-                    setShowModelSelector(false);
-                  }}
+                  onPress={() => handleModelSelect(model)}
                 >
-                  <View>
-                    <Text style={styles.modelName}>{model.name}</Text>
+                  <View style={styles.modelInfo}>
+                    <View style={styles.modelNameContainer}>
+                      <Text style={styles.modelName}>{model.name}</Text>
+                      {model.isPremium && (
+                        <Crown size={12} color="#F59E0B" />
+                      )}
+                    </View>
                     <Text style={styles.modelDescription}>{model.description}</Text>
                   </View>
                   {selectedModel.id === model.id && (
@@ -226,7 +414,14 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}
         >
           {messages.map(renderMessage)}
-          {isLoading && (
+          {streamingMessage && (
+            <StreamingMessage
+              text={streamingMessage.text}
+              isComplete={!streamingMessage.isStreaming}
+              model={streamingMessage.model || 'AI'}
+            />
+          )}
+          {isLoading && !streamingMessage && (
             <View style={[styles.messageContainer, styles.aiMessage]}>
               <View style={styles.messageHeader}>
                 <View style={styles.avatarContainer}>
@@ -254,24 +449,52 @@ export default function ChatScreen() {
                 style={styles.textInput}
                 value={inputText}
                 onChangeText={setInputText}
-                placeholder="Ask me anything..."
+                placeholder={canSendMessage() ? "Ask me anything..." : "Upgrade to continue chatting..."}
                 placeholderTextColor="#9CA3AF"
                 multiline
                 maxLength={1000}
+                editable={canSendMessage()}
               />
-              <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  (!inputText.trim() || isLoading) && styles.sendButtonDisabled
-                ]}
-                onPress={sendMessage}
-                disabled={!inputText.trim() || isLoading}
-              >
-                <Send size={20} color={(!inputText.trim() || isLoading) ? '#9CA3AF' : '#FFFFFF'} />
-              </TouchableOpacity>
+              <View style={styles.inputActions}>
+                {canSendMessage() && (
+                  <VoiceInput
+                    onTranscription={handleVoiceTranscription}
+                    isListening={isListening}
+                    onStartListening={startListening}
+                    onStopListening={stopListening}
+                  />
+                )}
+                {canSendMessage() ? (
+                  <TouchableOpacity
+                    style={[
+                      styles.sendButton,
+                      (!inputText.trim() || isLoading) && styles.sendButtonDisabled
+                    ]}
+                    onPress={() => sendMessage()}
+                    disabled={!inputText.trim() || isLoading}
+                  >
+                    <Send size={20} color={(!inputText.trim() || isLoading) ? '#9CA3AF' : '#FFFFFF'} />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.upgradeButton}
+                    onPress={() => setShowPremiumModal(true)}
+                  >
+                    <Zap size={20} color="#FFFFFF" />
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
           </BlurView>
         </KeyboardAvoidingView>
+
+        {/* Premium Modal */}
+        <PremiumModal
+          visible={showPremiumModal}
+          onClose={() => setShowPremiumModal(false)}
+          onUpgrade={handlePremiumUpgrade}
+          remainingMessages={remainingMessages}
+        />
       </LinearGradient>
     </SafeAreaView>
   );
@@ -300,10 +523,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1F2937',
   },
+  headerSubtitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
   headerSubtitle: {
     fontSize: 14,
     color: '#6B7280',
-    marginTop: 2,
   },
   newChatButton: {
     width: 44,
@@ -312,6 +540,22 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(99, 102, 241, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  usageWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginBottom: 12,
+    gap: 8,
+  },
+  usageWarningText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#D97706',
+    fontWeight: '500',
   },
   modelSelector: {
     flexDirection: 'row',
@@ -322,17 +566,17 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(99, 102, 241, 0.2)',
+    gap: 8,
   },
   modelText: {
     flex: 1,
-    marginLeft: 8,
     fontSize: 16,
     fontWeight: '600',
     color: '#374151',
   },
   modelDropdown: {
     position: 'absolute',
-    top: 120,
+    top: 140,
     left: 20,
     right: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -354,6 +598,17 @@ const styles = StyleSheet.create({
   },
   selectedModel: {
     backgroundColor: 'rgba(99, 102, 241, 0.1)',
+  },
+  premiumModel: {
+    opacity: 0.6,
+  },
+  modelInfo: {
+    flex: 1,
+  },
+  modelNameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   modelName: {
     fontSize: 16,
@@ -458,6 +713,12 @@ const styles = StyleSheet.create({
     color: '#374151',
     maxHeight: 120,
     paddingVertical: 8,
+    marginRight: 12,
+  },
+  inputActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   sendButton: {
     width: 44,
@@ -466,9 +727,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#6366F1',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 12,
   },
   sendButtonDisabled: {
     backgroundColor: '#E5E7EB',
+  },
+  upgradeButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F59E0B',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
